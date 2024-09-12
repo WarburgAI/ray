@@ -132,20 +132,14 @@ class TfMLPEncoder(Encoder, TfModel):
             hidden_layer_use_layernorm=config.hidden_layer_use_layernorm,
             hidden_layer_use_bias=config.hidden_layer_use_bias,
             hidden_layer_weights_initializer=config.hidden_layer_weights_initializer,
-            hidden_layer_weights_initializer_config=(
-                config.hidden_layer_weights_initializer_config
-            ),
+            hidden_layer_weights_initializer_config=(config.hidden_layer_weights_initializer_config),
             hidden_layer_bias_initializer=config.hidden_layer_bias_initializer,
-            hidden_layer_bias_initializer_config=(
-                config.hidden_layer_bias_initializer_config
-            ),
+            hidden_layer_bias_initializer_config=(config.hidden_layer_bias_initializer_config),
             output_dim=config.output_layer_dim,
             output_activation=config.output_layer_activation,
             output_use_bias=config.output_layer_use_bias,
             output_weights_initializer=config.output_layer_weights_initializer,
-            output_weights_initializer_config=(
-                config.output_layer_weights_initializer_config
-            ),
+            output_weights_initializer_config=(config.output_layer_weights_initializer_config),
             output_bias_initializer=config.output_layer_bias_initializer,
             output_bias_initializer_config=config.output_layer_bias_initializer_config,
         )
@@ -154,9 +148,7 @@ class TfMLPEncoder(Encoder, TfModel):
     def get_input_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
-                Columns.OBS: TensorSpec(
-                    "b, d", d=self.config.input_dims[0], framework="tf2"
-                ),
+                Columns.OBS: TensorSpec("b, d", d=self.config.input_dims[0], framework="tf2"),
             }
         )
 
@@ -164,9 +156,7 @@ class TfMLPEncoder(Encoder, TfModel):
     def get_output_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
-                ENCODER_OUT: TensorSpec(
-                    "b, d", d=self.config.output_dims[0], framework="tf2"
-                ),
+                ENCODER_OUT: TensorSpec("b, d", d=self.config.output_dims[0], framework="tf2"),
             }
         )
 
@@ -193,9 +183,7 @@ class TfGRUEncoder(TfModel, Encoder):
             # For our first input dim, we infer from the tokenizer.
             # This is necessary because we need to build the layers in order to be
             # able to get/set weights directly after instantiation.
-            input_dims = (1,) + tuple(
-                self.tokenizer.output_specs[ENCODER_OUT].full_shape
-            )
+            input_dims = (1,) + tuple(self.tokenizer.output_specs[ENCODER_OUT].full_shape)
         else:
             self.tokenizer = None
             input_dims = (
@@ -203,12 +191,8 @@ class TfGRUEncoder(TfModel, Encoder):
                 1,
             ) + tuple(config.input_dims)
 
-        gru_weights_initializer = get_initializer_fn(
-            config.hidden_weights_initializer, framework="tf2"
-        )
-        gru_bias_initializer = get_initializer_fn(
-            config.hidden_bias_initializer, framework="tf2"
-        )
+        gru_weights_initializer = get_initializer_fn(config.hidden_weights_initializer, framework="tf2")
+        gru_bias_initializer = get_initializer_fn(config.hidden_bias_initializer, framework="tf2")
 
         # Create the tf GRU layers.
         self.grus = []
@@ -218,17 +202,9 @@ class TfGRUEncoder(TfModel, Encoder):
                 time_major=not config.batch_major,
                 # Note, if the initializer is `None`, we want TensorFlow
                 # to use its default one. So we pass in `None`.
-                kernel_initializer=(
-                    gru_weights_initializer(**config.hidden_weights_initializer_config)
-                    if config.hidden_weights_initializer_config
-                    else gru_weights_initializer
-                ),
+                kernel_initializer=(gru_weights_initializer(**config.hidden_weights_initializer_config) if config.hidden_weights_initializer_config else gru_weights_initializer),
                 use_bias=config.use_bias,
-                bias_initializer=(
-                    gru_bias_initializer(**config.hidden_bias_initializer_config)
-                    if config.hidden_bias_initializer_config
-                    else gru_bias_initializer
-                ),
+                bias_initializer=(gru_bias_initializer(**config.hidden_bias_initializer_config) if config.hidden_bias_initializer_config else gru_bias_initializer),
                 return_sequences=True,
                 return_state=True,
             )
@@ -236,14 +212,19 @@ class TfGRUEncoder(TfModel, Encoder):
             input_dims = (1, 1, config.hidden_dim)
             self.grus.append(layer)
 
+        # Add the linear output layer
+        self.output_layer = tf.keras.layers.Dense(
+            config.output_dims[0],
+            activation=None,
+            use_bias=True,
+        )
+
     @override(Model)
     def get_input_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
                 # b, t for batch major; t, b for time major.
-                Columns.OBS: TensorSpec(
-                    "b, t, d", d=self.config.input_dims[0], framework="tf2"
-                ),
+                Columns.OBS: TensorSpec("b, t, d", d=self.config.input_dims[0], framework="tf2"),
                 Columns.STATE_IN: {
                     "h": TensorSpec(
                         "b, l, h",
@@ -259,9 +240,7 @@ class TfGRUEncoder(TfModel, Encoder):
     def get_output_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
-                ENCODER_OUT: TensorSpec(
-                    "b, t, d", d=self.config.output_dims[0], framework="tf2"
-                ),
+                ENCODER_OUT: TensorSpec("b, t, d", d=self.config.output_dims[0], framework="tf2"),
                 Columns.STATE_OUT: {
                     "h": TensorSpec(
                         "b, l, h",
@@ -301,6 +280,9 @@ class TfGRUEncoder(TfModel, Encoder):
             out, h = layer(out, states_in["h"][i])
             states_out.append(h)
 
+        # Apply the linear output layer
+        out = self.output_layer(out)
+
         # Insert them into the output dict.
         outputs[ENCODER_OUT] = out
         outputs[Columns.STATE_OUT] = {"h": tf.stack(states_out, 1)}
@@ -325,9 +307,7 @@ class TfLSTMEncoder(TfModel, Encoder):
             # For our first input dim, we infer from the tokenizer.
             # This is necessary because we need to build the layers in order to be
             # able to get/set weights directly after instantiation.
-            input_dims = (1,) + tuple(
-                self.tokenizer.output_specs[ENCODER_OUT].full_shape
-            )
+            input_dims = (1,) + tuple(self.tokenizer.output_specs[ENCODER_OUT].full_shape)
         else:
             self.tokenizer = None
             input_dims = (
@@ -335,12 +315,8 @@ class TfLSTMEncoder(TfModel, Encoder):
                 1,
             ) + tuple(config.input_dims)
 
-        lstm_weights_initializer = get_initializer_fn(
-            config.hidden_weights_initializer, framework="tf2"
-        )
-        lstm_bias_initializer = get_initializer_fn(
-            config.hidden_bias_initializer, framework="tf2"
-        )
+        lstm_weights_initializer = get_initializer_fn(config.hidden_weights_initializer, framework="tf2")
+        lstm_bias_initializer = get_initializer_fn(config.hidden_bias_initializer, framework="tf2")
 
         # Create the tf LSTM layers.
         self.lstms = []
@@ -350,17 +326,9 @@ class TfLSTMEncoder(TfModel, Encoder):
                 time_major=not config.batch_major,
                 # Note, if the initializer is `None`, we want TensorFlow
                 # to use its default one. So we pass in `None`.
-                kernel_initializer=(
-                    lstm_weights_initializer(**config.hidden_weights_initializer_config)
-                    if config.hidden_weights_initializer_config
-                    else lstm_weights_initializer
-                ),
+                kernel_initializer=(lstm_weights_initializer(**config.hidden_weights_initializer_config) if config.hidden_weights_initializer_config else lstm_weights_initializer),
                 use_bias=config.use_bias,
-                bias_initializer=(
-                    lstm_bias_initializer(**config.hidden_bias_initializer_config)
-                    if config.hidden_bias_initializer_config
-                    else "zeros"
-                ),
+                bias_initializer=(lstm_bias_initializer(**config.hidden_bias_initializer_config) if config.hidden_bias_initializer_config else "zeros"),
                 return_sequences=True,
                 return_state=True,
             )
@@ -368,14 +336,19 @@ class TfLSTMEncoder(TfModel, Encoder):
             input_dims = (1, 1, config.hidden_dim)
             self.lstms.append(layer)
 
+        # Add the linear output layer
+        self.output_layer = tf.keras.layers.Dense(
+            config.output_dims[0],
+            activation=None,
+            use_bias=True,
+        )
+
     @override(Model)
     def get_input_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
                 # b, t for batch major; t, b for time major.
-                Columns.OBS: TensorSpec(
-                    "b, t, d", d=self.config.input_dims[0], framework="tf2"
-                ),
+                Columns.OBS: TensorSpec("b, t, d", d=self.config.input_dims[0], framework="tf2"),
                 Columns.STATE_IN: {
                     "h": TensorSpec(
                         "b, l, h",
@@ -397,9 +370,7 @@ class TfLSTMEncoder(TfModel, Encoder):
     def get_output_specs(self) -> Optional[Spec]:
         return SpecDict(
             {
-                ENCODER_OUT: TensorSpec(
-                    "b, t, d", d=self.config.output_dims[0], framework="tf2"
-                ),
+                ENCODER_OUT: TensorSpec("b, t, d", d=self.config.output_dims[0], framework="tf2"),
                 Columns.STATE_OUT: {
                     "h": TensorSpec(
                         "b, l, h",
@@ -447,6 +418,9 @@ class TfLSTMEncoder(TfModel, Encoder):
             out, h, c = layer(out, (states_in["h"][i], states_in["c"][i]))
             states_out_h.append(h)
             states_out_c.append(c)
+
+        # Apply the linear output layer
+        out = self.output_layer(out)
 
         # Insert them into the output dict.
         outputs[ENCODER_OUT] = out
