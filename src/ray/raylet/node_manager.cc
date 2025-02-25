@@ -16,6 +16,7 @@
 
 #include <cctype>
 #include <csignal>
+#include <cstddef>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -35,6 +36,7 @@
 #include "ray/common/scheduling/scheduling_ids.h"
 #include "ray/common/status.h"
 #include "ray/common/task/task_common.h"
+#include "ray/common/task/task_spec.h"
 #include "ray/gcs/pb_util.h"
 #include "ray/raylet/format/node_manager_generated.h"
 #include "ray/raylet/scheduling/cluster_task_manager.h"
@@ -1234,11 +1236,10 @@ void NodeManager::ProcessClientMessage(const std::shared_ptr<ClientConnection> &
     ProcessFetchOrReconstructMessage(client, message_data);
   } break;
   case protocol::MessageType::NotifyDirectCallTaskBlocked: {
-    ProcessDirectCallTaskBlocked(client, message_data);
+    HandleDirectCallTaskBlocked(registered_worker);
   } break;
   case protocol::MessageType::NotifyDirectCallTaskUnblocked: {
-    std::shared_ptr<WorkerInterface> worker = worker_pool_.GetRegisteredWorker(client);
-    HandleDirectCallTaskUnblocked(worker);
+    HandleDirectCallTaskUnblocked(registered_worker);
   } break;
   case protocol::MessageType::NotifyUnblocked: {
     // TODO(ekl) this is still used from core worker even in direct call mode to
@@ -1723,15 +1724,6 @@ void NodeManager::ProcessFetchOrReconstructMessage(
   }
 }
 
-void NodeManager::ProcessDirectCallTaskBlocked(
-    const std::shared_ptr<ClientConnection> &client, const uint8_t *message_data) {
-  auto message =
-      flatbuffers::GetRoot<protocol::NotifyDirectCallTaskBlocked>(message_data);
-  RAY_CHECK(message->release_resources());
-  std::shared_ptr<WorkerInterface> worker = worker_pool_.GetRegisteredWorker(client);
-  HandleDirectCallTaskBlocked(worker, true);
-}
-
 void NodeManager::ProcessWaitRequestMessage(
     const std::shared_ptr<ClientConnection> &client, const uint8_t *message_data) {
   // Read the data.
@@ -1759,7 +1751,7 @@ void NodeManager::ProcessWaitRequestMessage(
                         current_task_id,
                         /*ray_get=*/false);
   }
-  if (message->num_ready_objects() == 0) {
+  if (message->num_required_objects() == 0) {
     // If we don't need to wait for any, return immediately after making the pull
     // requests through AsyncResolveObjects above.
     flatbuffers::FlatBufferBuilder fbb;
@@ -1784,7 +1776,7 @@ void NodeManager::ProcessWaitRequestMessage(
     }
     return;
   }
-  uint64_t num_required_objects = static_cast<uint64_t>(message->num_ready_objects());
+  uint64_t num_required_objects = static_cast<uint64_t>(message->num_required_objects());
   wait_manager_.Wait(
       object_ids,
       message->timeout(),
@@ -1870,6 +1862,21 @@ void NodeManager::HandleGetResourceLoad(rpc::GetResourceLoadRequest request,
   resources_data->set_node_id(self_node_id_.Binary());
   resources_data->set_node_manager_address(initial_config_.node_manager_address);
   cluster_task_manager_->FillResourceUsage(*resources_data);
+  send_reply_callback(Status::OK(), nullptr, nullptr);
+}
+
+void NodeManager::HandleCancelTasksWithResourceShapes(
+    rpc::CancelTasksWithResourceShapesRequest request,
+    rpc::CancelTasksWithResourceShapesReply *reply,
+    rpc::SendReplyCallback send_reply_callback) {
+  const auto &resource_shapes = request.resource_shapes();
+  std::vector<ResourceSet> target_resource_shapes;
+  for (const auto &resource_shape : resource_shapes) {
+    target_resource_shapes.emplace_back(
+        ResourceSet(MapFromProtobuf(resource_shape.resource_shape())));
+  }
+
+  cluster_task_manager_->CancelTasksWithResourceShapes(target_resource_shapes);
   send_reply_callback(Status::OK(), nullptr, nullptr);
 }
 
@@ -2284,9 +2291,8 @@ void NodeManager::MarkObjectsAsFailed(
 }
 
 void NodeManager::HandleDirectCallTaskBlocked(
-    const std::shared_ptr<WorkerInterface> &worker, bool release_resources) {
-  if (!worker || worker->IsBlocked() || worker->GetAssignedTaskId().IsNil() ||
-      !release_resources) {
+    const std::shared_ptr<WorkerInterface> &worker) {
+  if (!worker || worker->IsBlocked() || worker->GetAssignedTaskId().IsNil()) {
     return;  // The worker may have died or is no longer processing the task.
   }
   local_task_manager_->ReleaseCpuResourcesFromBlockedWorker(worker);
