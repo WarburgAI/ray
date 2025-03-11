@@ -121,7 +121,7 @@ nitpicky = True
 nitpick_ignore_regex = [
     ("py:class", ".*"),
     # Workaround for https://github.com/sphinx-doc/sphinx/issues/10974
-    ("py:obj", "ray\.data\.datasource\.datasink\.WriteReturnType"),
+    ("py:obj", "ray\\.data\\.datasource\\.datasink\\.WriteReturnType"),
 ]
 
 # Cache notebook outputs in _build/.jupyter_cache
@@ -561,6 +561,19 @@ def setup(app):
 
     # Hook into the auto generation of public apis
     app.connect("builder-inited", _autogen_apis)
+
+    class DuplicateObjectFilter(logging.Filter):
+        def filter(self, record):
+            # Intentionally allow duplicate object description of ray.actor.ActorMethod.bind:
+            # once in Ray Core API and once in Compiled Graph API
+            if (
+                "duplicate object description of ray.actor.ActorMethod.bind"
+                in record.getMessage()
+            ):
+                return False  # Don't log this specific warning
+            return True  # Log all other warnings
+
+    logging.getLogger("sphinx").addFilter(DuplicateObjectFilter())
 
 
 redoc = [
